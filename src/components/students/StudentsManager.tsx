@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -11,11 +11,24 @@ import { ApiError, api } from "@/lib/api";
 
 type CatalogItem = { id: string; name: string; isActive: boolean };
 
+type BatchOption = {
+  id: string;
+  name: string;
+  isActive: boolean;
+  classGrade: { id: string; name: string };
+};
+
 type StudentListItem = {
   id: string;
   fullName: string;
   className: string | null;
   createdAt: string;
+  batches: {
+    id: string;
+    name: string;
+    isActive: boolean;
+    className: string;
+  }[];
   parent: {
     profileId: string;
     userId: string;
@@ -34,6 +47,7 @@ type CreateResponse = {
     id: string;
     fullName: string;
     className: string | null;
+    batch: { id: string; name: string; className: string } | null;
   };
   parent: {
     fullName: string;
@@ -47,6 +61,8 @@ type FieldErrors = {
   parentEmail?: string;
   parentPhone?: string;
   studentFullName?: string;
+  className?: string;
+  batchId?: string;
 };
 
 function validate(values: {
@@ -54,6 +70,9 @@ function validate(values: {
   parentEmail: string;
   parentPhone: string;
   studentFullName: string;
+  className: string;
+  batchId: string;
+  batchesForClass: number;
 }): FieldErrors {
   const errors: FieldErrors = {};
   const emailOk = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
@@ -78,12 +97,22 @@ function validate(values: {
     errors.studentFullName = "Enter the student’s full name.";
   }
 
+  if (!values.className) {
+    errors.className = "Select the student’s class.";
+  } else if (values.batchesForClass === 0) {
+    errors.batchId =
+      "No batch for this class yet. Create one under Catalog → Classes, then come back.";
+  } else if (!values.batchId) {
+    errors.batchId = "Select a batch for this class.";
+  }
+
   return errors;
 }
 
 export function StudentsManager() {
   const [items, setItems] = useState<StudentListItem[]>([]);
-  const [classes, setClasses] = useState<string[]>([]);
+  const [classes, setClasses] = useState<CatalogItem[]>([]);
+  const [batches, setBatches] = useState<BatchOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
 
@@ -92,10 +121,19 @@ export function StudentsManager() {
   const [parentPhone, setParentPhone] = useState("");
   const [studentFullName, setStudentFullName] = useState("");
   const [className, setClassName] = useState("");
+  const [batchId, setBatchId] = useState("");
   const [errors, setErrors] = useState<FieldErrors>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [created, setCreated] = useState<CreateResponse | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  const batchesForClass = useMemo(
+    () =>
+      batches.filter(
+        (b) => b.isActive && b.classGrade.name === className,
+      ),
+    [batches, className],
+  );
 
   const loadList = useCallback(async () => {
     setLoading(true);
@@ -115,17 +153,24 @@ export function StudentsManager() {
     }
   }, []);
 
+  const loadOptions = useCallback(async () => {
+    try {
+      const [classesRes, batchesRes] = await Promise.all([
+        api.get<CatalogItem[]>("/catalog/classes"),
+        api.get<BatchOption[]>("/batches"),
+      ]);
+      setClasses(classesRes.data.filter((c) => c.isActive));
+      setBatches(batchesRes.data);
+    } catch {
+      setClasses([]);
+      setBatches([]);
+    }
+  }, []);
+
   useEffect(() => {
     void loadList();
-    void (async () => {
-      try {
-        const { data } = await api.get<CatalogItem[]>("/catalog/classes");
-        setClasses(data.filter((c) => c.isActive).map((c) => c.name));
-      } catch {
-        setClasses([]);
-      }
-    })();
-  }, [loadList]);
+    void loadOptions();
+  }, [loadList, loadOptions]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -137,6 +182,9 @@ export function StudentsManager() {
       parentEmail,
       parentPhone,
       studentFullName,
+      className,
+      batchId,
+      batchesForClass: batchesForClass.length,
     });
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
@@ -148,7 +196,8 @@ export function StudentsManager() {
         parentEmail: parentEmail.trim(),
         parentPhone: parentPhone.trim() || undefined,
         studentFullName: studentFullName.trim(),
-        className: className || undefined,
+        className,
+        batchId,
       });
       setCreated(data);
       setParentFullName("");
@@ -156,6 +205,7 @@ export function StudentsManager() {
       setParentPhone("");
       setStudentFullName("");
       setClassName("");
+      setBatchId("");
       setErrors({});
       await loadList();
     } catch (error) {
@@ -173,13 +223,12 @@ export function StudentsManager() {
     <div className="space-y-6">
       <PageHeader
         title="Students & parents"
-        description="Create a student under a parent. One email login for the family."
+        description="Create a student under a parent, pick their class, and enroll them in a batch."
       />
 
       <Alert variant="info">
-        Parent and student share one email login. Welcome email is not configured
-        yet — copy the temporary password from the success panel. Parent login
-        comes in the next step.
+        Choose class and batch here so the student is ready for offline sessions.
+        Create batches under Catalog → Classes if none exist yet.
       </Alert>
 
       <Card>
@@ -204,10 +253,11 @@ export function StudentsManager() {
                   {created.student.className
                     ? ` · ${created.student.className}`
                     : ""}
+                  {created.student.batch
+                    ? ` · Batch: ${created.student.batch.name}`
+                    : ""}
                 </p>
-                <p>
-                  Login email: {created.credentials.email}
-                </p>
+                <p>Login email: {created.credentials.email}</p>
                 <p>
                   Temporary password:{" "}
                   <code className="rounded bg-surface-muted px-1.5 py-0.5 font-mono text-xs">
@@ -271,27 +321,88 @@ export function StudentsManager() {
               }}
               error={errors.studentFullName}
             />
-            <div className="flex w-full flex-col gap-1.5 sm:col-span-2">
+
+            <div className="flex w-full flex-col gap-1.5">
               <label
                 htmlFor="className"
                 className="text-sm font-medium text-text"
               >
-                Student class (optional)
+                Student class
               </label>
               <select
                 id="className"
                 name="className"
                 value={className}
-                onChange={(e) => setClassName(e.target.value)}
+                onChange={(e) => {
+                  setClassName(e.target.value);
+                  setBatchId("");
+                  setErrors((c) => ({
+                    ...c,
+                    className: undefined,
+                    batchId: undefined,
+                  }));
+                }}
                 className="min-h-11 w-full rounded-xl border border-border bg-surface px-3.5 py-2.5 text-base text-text shadow-sm focus:border-primary"
               >
                 <option value="">Select class</option>
-                {classes.map((name) => (
-                  <option key={name} value={name}>
-                    {name}
+                {classes.map((item) => (
+                  <option key={item.id} value={item.name}>
+                    {item.name}
                   </option>
                 ))}
               </select>
+              {errors.className ? (
+                <p role="alert" className="text-xs text-error">
+                  {errors.className}
+                </p>
+              ) : null}
+            </div>
+
+            <div className="flex w-full flex-col gap-1.5">
+              <label
+                htmlFor="batchId"
+                className="text-sm font-medium text-text"
+              >
+                Batch
+              </label>
+              <select
+                id="batchId"
+                name="batchId"
+                value={batchId}
+                disabled={!className}
+                onChange={(e) => {
+                  setBatchId(e.target.value);
+                  if (errors.batchId)
+                    setErrors((c) => ({ ...c, batchId: undefined }));
+                }}
+                className="min-h-11 w-full rounded-xl border border-border bg-surface px-3.5 py-2.5 text-base text-text shadow-sm focus:border-primary disabled:opacity-60"
+              >
+                <option value="">
+                  {!className
+                    ? "Select a class first"
+                    : batchesForClass.length === 0
+                      ? "No batches for this class"
+                      : "Select batch"}
+                </option>
+                {batchesForClass.map((batch) => (
+                  <option key={batch.id} value={batch.id}>
+                    {batch.name}
+                  </option>
+                ))}
+              </select>
+              {errors.batchId ? (
+                <p role="alert" className="text-xs text-error">
+                  {errors.batchId}
+                </p>
+              ) : className && batchesForClass.length === 0 ? (
+                <p className="text-xs text-text-secondary">
+                  Create a batch under Catalog → Classes for {className}.
+                </p>
+              ) : (
+                <p className="text-xs text-text-secondary">
+                  Student is enrolled in this batch for offline sessions.
+                </p>
+              )}
             </div>
           </div>
 
@@ -320,6 +431,9 @@ export function StudentsManager() {
                     <p className="font-semibold text-text">{item.fullName}</p>
                     <p className="mt-0.5 text-sm text-text-secondary">
                       {item.className ?? "Class not set"}
+                      {item.batches.length > 0
+                        ? ` · ${item.batches.map((b) => b.name).join(", ")}`
+                        : " · No batch"}
                     </p>
                   </div>
                   <div className="text-sm text-text-secondary sm:text-right">

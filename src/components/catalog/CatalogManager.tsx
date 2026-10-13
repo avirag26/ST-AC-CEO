@@ -17,6 +17,15 @@ export type CatalogItem = {
   isActive: boolean;
 };
 
+type BatchListItem = {
+  id: string;
+  name: string;
+  isActive: boolean;
+  studentCount: number;
+  classGrade: { id: string; name: string };
+  tutor: { fullName: string } | null;
+};
+
 type CatalogTab = "classes" | "subjects";
 
 const tabItems = [
@@ -29,7 +38,7 @@ const tabMeta: Record<
   { hint: string; singular: string; placeholder: string }
 > = {
   classes: {
-    hint: "Shown in tutor registration (for example Class 10).",
+    hint: "Shown in tutor registration and student signup (for example Class 10). You can add batches under each class.",
     singular: "class",
     placeholder: "e.g. Class 10",
   },
@@ -43,7 +52,9 @@ const tabMeta: Record<
 export function CatalogManager() {
   const [activeTab, setActiveTab] = useState<CatalogTab>("classes");
   const [items, setItems] = useState<CatalogItem[]>([]);
+  const [batches, setBatches] = useState<BatchListItem[]>([]);
   const [name, setName] = useState("");
+  const [firstBatchName, setFirstBatchName] = useState("");
   const [fieldError, setFieldError] = useState<string | undefined>();
   const [listError, setListError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -58,9 +69,23 @@ export function CatalogManager() {
   const [deleteTarget, setDeleteTarget] = useState<CatalogItem | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  const [expandedClassId, setExpandedClassId] = useState<string | null>(null);
+  const [newBatchName, setNewBatchName] = useState("");
+  const [batchError, setBatchError] = useState<string | undefined>();
+  const [batchSaving, setBatchSaving] = useState(false);
+
   const endpoint =
     activeTab === "classes" ? "/catalog/classes" : "/catalog/subjects";
   const meta = tabMeta[activeTab];
+
+  const loadBatches = useCallback(async () => {
+    try {
+      const { data } = await api.get<BatchListItem[]>("/batches");
+      setBatches(data);
+    } catch {
+      setBatches([]);
+    }
+  }, []);
 
   const loadItems = useCallback(async () => {
     setLoading(true);
@@ -68,6 +93,9 @@ export function CatalogManager() {
     try {
       const { data } = await api.get<CatalogItem[]>(endpoint);
       setItems(data);
+      if (activeTab === "classes") {
+        await loadBatches();
+      }
     } catch (error) {
       setItems([]);
       setListError(
@@ -78,16 +106,20 @@ export function CatalogManager() {
     } finally {
       setLoading(false);
     }
-  }, [endpoint]);
+  }, [endpoint, activeTab, loadBatches]);
 
   useEffect(() => {
     setName("");
+    setFirstBatchName("");
     setFieldError(undefined);
     setSuccess(null);
     setEditingId(null);
     setEditName("");
     setEditError(undefined);
     setDeleteTarget(null);
+    setExpandedClassId(null);
+    setNewBatchName("");
+    setBatchError(undefined);
     void loadItems();
   }, [loadItems]);
 
@@ -104,9 +136,25 @@ export function CatalogManager() {
     setSaving(true);
     setFieldError(undefined);
     try {
-      await api.post(endpoint, { name: trimmed });
+      const { data: created } = await api.post<CatalogItem>(endpoint, {
+        name: trimmed,
+      });
+
+      const batchTrimmed = firstBatchName.trim();
+      if (activeTab === "classes" && batchTrimmed) {
+        await api.post("/batches", {
+          name: batchTrimmed,
+          classGradeId: created.id,
+        });
+        setSuccess(
+          `“${trimmed}” was added with batch “${batchTrimmed}”.`,
+        );
+      } else {
+        setSuccess(`“${trimmed}” was added.`);
+      }
+
       setName("");
-      setSuccess(`“${trimmed}” was added.`);
+      setFirstBatchName("");
       await loadItems();
     } catch (error) {
       setFieldError(
@@ -183,11 +231,44 @@ export function CatalogManager() {
     }
   }
 
+  async function handleAddBatch(classGradeId: string) {
+    const trimmed = newBatchName.trim();
+    if (!trimmed) {
+      setBatchError("Enter a batch name.");
+      return;
+    }
+
+    setBatchSaving(true);
+    setBatchError(undefined);
+    setSuccess(null);
+    try {
+      await api.post("/batches", {
+        name: trimmed,
+        classGradeId,
+      });
+      setNewBatchName("");
+      setSuccess(`Batch “${trimmed}” was added.`);
+      await loadBatches();
+    } catch (error) {
+      setBatchError(
+        error instanceof ApiError
+          ? error.message
+          : "Could not create batch.",
+      );
+    } finally {
+      setBatchSaving(false);
+    }
+  }
+
+  function batchesForClass(classId: string) {
+    return batches.filter((b) => b.classGrade.id === classId);
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
         title="Classes & Subjects"
-        description="Manage the lists tutors choose when they register. Keep names clear so parents and teachers understand them easily."
+        description="Manage classes and subjects. Under each class you can create offline batches for student enrollment."
       />
 
       <Tabs
@@ -212,33 +293,47 @@ export function CatalogManager() {
 
         <form
           onSubmit={handleCreate}
-          className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-start"
+          className="mt-5 space-y-4"
           noValidate
         >
-          <div className="flex-1">
-            <TextField
-              name="catalogName"
-              label={`${meta.singular[0].toUpperCase()}${meta.singular.slice(1)} name`}
-              placeholder={meta.placeholder}
-              value={name}
-              onChange={(event) => {
-                setName(event.target.value);
-                if (fieldError) {
-                  setFieldError(undefined);
-                }
-              }}
-              error={fieldError}
-            />
-          </div>
-          <div className="sm:pt-7">
-            <Button
-              type="submit"
-              fullWidth
-              isLoading={saving}
-              className="sm:min-w-36 sm:w-auto"
-            >
-              Add {meta.singular}
-            </Button>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
+            <div className="flex-1">
+              <TextField
+                name="catalogName"
+                label={`${meta.singular[0].toUpperCase()}${meta.singular.slice(1)} name`}
+                placeholder={meta.placeholder}
+                value={name}
+                onChange={(event) => {
+                  setName(event.target.value);
+                  if (fieldError) {
+                    setFieldError(undefined);
+                  }
+                }}
+                error={fieldError}
+              />
+            </div>
+            {activeTab === "classes" ? (
+              <div className="flex-1">
+                <TextField
+                  name="firstBatchName"
+                  label="First batch (optional)"
+                  placeholder="e.g. Morning A"
+                  value={firstBatchName}
+                  onChange={(event) => setFirstBatchName(event.target.value)}
+                  hint="Creates a batch under this class right away."
+                />
+              </div>
+            ) : null}
+            <div className="sm:pt-7">
+              <Button
+                type="submit"
+                fullWidth
+                isLoading={saving}
+                className="sm:min-w-36 sm:w-auto"
+              >
+                Add {meta.singular}
+              </Button>
+            </div>
           </div>
         </form>
 
@@ -256,7 +351,9 @@ export function CatalogManager() {
               Current {activeTab}
             </h3>
             <p className="text-xs text-text-secondary">
-              {loading ? "Loading…" : `${items.length} item${items.length === 1 ? "" : "s"}`}
+              {loading
+                ? "Loading…"
+                : `${items.length} item${items.length === 1 ? "" : "s"}`}
             </p>
           </div>
         </div>
@@ -282,6 +379,9 @@ export function CatalogManager() {
             <ul className="space-y-2">
               {items.map((item) => {
                 const isEditing = editingId === item.id;
+                const classBatches =
+                  activeTab === "classes" ? batchesForClass(item.id) : [];
+                const expanded = expandedClassId === item.id;
 
                 return (
                   <li
@@ -321,35 +421,115 @@ export function CatalogManager() {
                         </div>
                       </div>
                     ) : (
-                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-semibold text-text">
-                            {item.name}
-                          </p>
-                          <p className="mt-0.5 text-xs text-text-secondary">
-                            Available for tutor registration
-                          </p>
+                      <>
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold text-text">
+                              {item.name}
+                            </p>
+                            <p className="mt-0.5 text-xs text-text-secondary">
+                              {activeTab === "classes"
+                                ? `${classBatches.length} batch${classBatches.length === 1 ? "" : "es"}`
+                                : "Available for tutor registration"}
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            {activeTab === "classes" ? (
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => {
+                                  setExpandedClassId(
+                                    expanded ? null : item.id,
+                                  );
+                                  setNewBatchName("");
+                                  setBatchError(undefined);
+                                }}
+                              >
+                                {expanded ? "Hide batches" : "Batches"}
+                              </Button>
+                            ) : null}
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              onClick={() => startEdit(item)}
+                            >
+                              Edit
+                            </Button>
+                            <Button
+                              variant="dangerOutline"
+                              size="sm"
+                              onClick={() => {
+                                setSuccess(null);
+                                setDeleteTarget(item);
+                              }}
+                            >
+                              Delete
+                            </Button>
+                          </div>
                         </div>
-                        <div className="flex gap-2">
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            onClick={() => startEdit(item)}
-                          >
-                            Edit
-                          </Button>
-                          <Button
-                            variant="dangerOutline"
-                            size="sm"
-                            onClick={() => {
-                              setSuccess(null);
-                              setDeleteTarget(item);
-                            }}
-                          >
-                            Delete
-                          </Button>
-                        </div>
-                      </div>
+
+                        {activeTab === "classes" && expanded ? (
+                          <div className="mt-4 space-y-3 border-t border-border pt-4">
+                            {classBatches.length === 0 ? (
+                              <p className="text-sm text-text-secondary">
+                                No batches under {item.name} yet.
+                              </p>
+                            ) : (
+                              <ul className="space-y-2">
+                                {classBatches.map((batch) => (
+                                  <li
+                                    key={batch.id}
+                                    className="flex items-center justify-between gap-3 rounded-xl border border-border bg-surface px-3 py-2 text-sm"
+                                  >
+                                    <div>
+                                      <p className="font-medium text-text">
+                                        {batch.name}
+                                      </p>
+                                      <p className="text-xs text-text-secondary">
+                                        {batch.studentCount} students
+                                        {batch.tutor
+                                          ? ` · ${batch.tutor.fullName}`
+                                          : " · No tutor yet"}
+                                        {batch.isActive ? "" : " · Inactive"}
+                                      </p>
+                                    </div>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+
+                            <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
+                              <div className="flex-1">
+                                <TextField
+                                  name={`batch-${item.id}`}
+                                  label="New batch name"
+                                  placeholder="e.g. Morning A"
+                                  value={newBatchName}
+                                  onChange={(e) => {
+                                    setNewBatchName(e.target.value);
+                                    if (batchError) setBatchError(undefined);
+                                  }}
+                                  error={batchError}
+                                />
+                              </div>
+                              <div className="sm:pt-7">
+                                <Button
+                                  size="sm"
+                                  isLoading={batchSaving}
+                                  onClick={() => void handleAddBatch(item.id)}
+                                >
+                                  Add batch
+                                </Button>
+                              </div>
+                            </div>
+                            <p className="text-xs text-text-secondary">
+                              Assign a tutor later under Offline batches if
+                              needed.
+                            </p>
+                          </div>
+                        ) : null}
+                      </>
                     )}
                   </li>
                 );

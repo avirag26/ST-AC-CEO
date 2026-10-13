@@ -25,12 +25,14 @@ type BatchOption = {
   name: string;
   isActive: boolean;
   classGrade: { name: string };
+  studentCount: number;
   tutor: { tutorProfileId: string; fullName: string } | null;
 };
 
 type StudentOption = {
   id: string;
   fullName: string;
+  className: string | null;
   parent: { fullName: string; email: string };
 };
 
@@ -128,6 +130,7 @@ export function SessionsManager() {
             {
               id: string;
               fullName: string;
+              className: string | null;
               parent: { fullName: string; email: string };
             }[]
           >("/students"),
@@ -140,6 +143,7 @@ export function SessionsManager() {
           studentsRes.data.map((s) => ({
             id: s.id,
             fullName: s.fullName,
+            className: s.className,
             parent: s.parent,
           })),
         );
@@ -153,6 +157,8 @@ export function SessionsManager() {
     setTutorProfileId("");
     void loadTutors(mode);
   }, [mode, loadTutors]);
+
+  const selectedBatch = batches.find((b) => b.id === batchId) ?? null;
 
   useEffect(() => {
     if (mode !== "OFFLINE" || !batchId) return;
@@ -177,6 +183,12 @@ export function SessionsManager() {
     }
     if (mode === "OFFLINE" && !batchId) {
       setFormError("Offline sessions need a batch.");
+      return;
+    }
+    if (mode === "OFFLINE" && selectedBatch && selectedBatch.studentCount === 0) {
+      setFormError(
+        "This batch has no enrolled students. Enroll students when registering them (Students → class + batch), or under Offline batches.",
+      );
       return;
     }
     if (mode === "ONLINE" && !studentId) {
@@ -342,10 +354,25 @@ export function SessionsManager() {
                   <option value="">Select batch</option>
                   {batches.map((batch) => (
                     <option key={batch.id} value={batch.id}>
-                      {batch.classGrade.name} — {batch.name}
+                      {batch.classGrade.name} — {batch.name} (
+                      {batch.studentCount} students)
                     </option>
                   ))}
                 </select>
+                {selectedBatch ? (
+                  <p
+                    className={[
+                      "text-sm",
+                      selectedBatch.studentCount === 0
+                        ? "text-warning"
+                        : "text-text-secondary",
+                    ].join(" ")}
+                  >
+                    {selectedBatch.studentCount === 0
+                      ? "No students in this batch yet. Assign class + batch when registering the student (Students), or enroll under Offline batches."
+                      : `${selectedBatch.studentCount} student${selectedBatch.studentCount === 1 ? "" : "s"} in this batch.`}
+                  </p>
+                ) : null}
               </div>
             ) : (
               <div className="flex w-full flex-col gap-1.5 sm:col-span-2">
@@ -365,7 +392,10 @@ export function SessionsManager() {
                   <option value="">Select student</option>
                   {students.map((student) => (
                     <option key={student.id} value={student.id}>
-                      {student.fullName} · {student.parent.fullName}
+                      {student.fullName}
+                      {student.className ? ` · ${student.className}` : ""}
+                      {" · "}
+                      {student.parent.fullName}
                     </option>
                   ))}
                 </select>

@@ -174,8 +174,22 @@ export function BatchesManager() {
 
   const availableStudents = useMemo(() => {
     const enrolled = new Set(detail?.students.map((s) => s.id) ?? []);
-    return allStudents.filter((s) => !enrolled.has(s.id));
+    const className = detail?.classGrade.name;
+    return allStudents
+      .filter((s) => !enrolled.has(s.id))
+      .sort((a, b) => {
+        const aMatch = className && a.className === className ? 0 : 1;
+        const bMatch = className && b.className === className ? 0 : 1;
+        if (aMatch !== bMatch) return aMatch - bMatch;
+        return a.fullName.localeCompare(b.fullName);
+      });
   }, [allStudents, detail]);
+
+  const matchingClassStudents = useMemo(() => {
+    if (!detail) return [];
+    const className = detail.classGrade.name;
+    return availableStudents.filter((s) => s.className === className);
+  }, [availableStudents, detail]);
 
   async function handleCreate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -574,6 +588,15 @@ export function BatchesManager() {
                 <h3 className="text-sm font-semibold text-text">
                   Enroll students
                 </h3>
+                <p className="text-xs text-text-secondary">
+                  Prefer assigning batch when registering a student. Use this
+                  for students who were created earlier without a batch.
+                </p>
+                <Alert variant="info">
+                  New students should get class + batch on Students. Use this
+                  list to catch up anyone still missing from{" "}
+                  {detail.classGrade.name}.
+                </Alert>
                 {availableStudents.length === 0 ? (
                   <p className="text-sm text-text-secondary">
                     All registered students are already in this batch, or none
@@ -581,27 +604,52 @@ export function BatchesManager() {
                   </p>
                 ) : (
                   <>
+                    {matchingClassStudents.length > 0 ? (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => {
+                          setEnrollIds(matchingClassStudents.map((s) => s.id));
+                        }}
+                      >
+                        Select all {detail.classGrade.name} students (
+                        {matchingClassStudents.length})
+                      </Button>
+                    ) : null}
                     <ul className="max-h-48 space-y-1 overflow-y-auto rounded-xl border border-border p-2">
-                      {availableStudents.map((student) => (
-                        <li key={student.id}>
-                          <label className="flex cursor-pointer items-start gap-2 rounded-lg px-2 py-2 hover:bg-surface-muted">
-                            <input
-                              type="checkbox"
-                              className="mt-1"
-                              checked={enrollIds.includes(student.id)}
-                              onChange={() => toggleEnrollId(student.id)}
-                            />
-                            <span>
-                              <span className="block text-sm font-medium text-text">
-                                {student.fullName}
+                      {availableStudents.map((student) => {
+                        const sameClass =
+                          student.className === detail.classGrade.name;
+                        return (
+                          <li key={student.id}>
+                            <label className="flex cursor-pointer items-start gap-2 rounded-lg px-2 py-2 hover:bg-surface-muted">
+                              <input
+                                type="checkbox"
+                                className="mt-1"
+                                checked={enrollIds.includes(student.id)}
+                                onChange={() => toggleEnrollId(student.id)}
+                              />
+                              <span>
+                                <span className="block text-sm font-medium text-text">
+                                  {student.fullName}
+                                  {sameClass ? (
+                                    <span className="ml-2 rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">
+                                      {detail.classGrade.name}
+                                    </span>
+                                  ) : null}
+                                </span>
+                                <span className="block text-xs text-text-secondary">
+                                  {student.className
+                                    ? `${student.className} · `
+                                    : ""}
+                                  {student.parent.fullName} ·{" "}
+                                  {student.parent.email}
+                                </span>
                               </span>
-                              <span className="block text-xs text-text-secondary">
-                                {student.parent.fullName} · {student.parent.email}
-                              </span>
-                            </span>
-                          </label>
-                        </li>
-                      ))}
+                            </label>
+                          </li>
+                        );
+                      })}
                     </ul>
                     <Button
                       size="sm"

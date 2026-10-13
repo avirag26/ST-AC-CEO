@@ -15,6 +15,7 @@ const navItems = [
   { href: "/students", label: "Students & parents", hint: "Create accounts" },
   { href: "/batches", label: "Offline batches", hint: "Groups & tutors" },
   { href: "/sessions", label: "Schedule sessions", hint: "Online & offline" },
+  { href: "/tracking", label: "Live tracking", hint: "Home tutor journeys" },
 ];
 
 type AppShellProps = {
