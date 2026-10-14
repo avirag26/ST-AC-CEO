@@ -5,9 +5,13 @@ import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { ListToolbar } from "@/components/ui/ListToolbar";
+import { Modal } from "@/components/ui/Modal";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { Pagination } from "@/components/ui/Pagination";
 import { TextField } from "@/components/ui/TextField";
 import { ApiError, api } from "@/lib/api";
+import { useClientList } from "@/lib/useClientList";
 
 type CatalogItem = { id: string; name: string; isActive: boolean };
 
@@ -65,6 +69,9 @@ type FieldErrors = {
   batchId?: string;
 };
 
+const selectClass =
+  "min-h-11 w-full rounded-xl border border-border bg-surface px-3.5 py-2.5 text-base text-text shadow-sm focus:border-primary disabled:opacity-60";
+
 function validate(values: {
   parentFullName: string;
   parentEmail: string;
@@ -101,7 +108,7 @@ function validate(values: {
     errors.className = "Select the student’s class.";
   } else if (values.batchesForClass === 0) {
     errors.batchId =
-      "No batch for this class yet. Create one under Catalog → Classes, then come back.";
+      "No batch for this class yet. Create one under Classes & Subjects.";
   } else if (!values.batchId) {
     errors.batchId = "Select a batch for this class.";
   }
@@ -115,6 +122,8 @@ export function StudentsManager() {
   const [batches, setBatches] = useState<BatchOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
+  const [classFilter, setClassFilter] = useState("");
+  const [modalOpen, setModalOpen] = useState(false);
 
   const [parentFullName, setParentFullName] = useState("");
   const [parentEmail, setParentEmail] = useState("");
@@ -128,12 +137,47 @@ export function StudentsManager() {
   const [submitting, setSubmitting] = useState(false);
 
   const batchesForClass = useMemo(
-    () =>
-      batches.filter(
-        (b) => b.isActive && b.classGrade.name === className,
-      ),
+    () => batches.filter((b) => b.isActive && b.classGrade.name === className),
     [batches, className],
   );
+
+  const classOptions = useMemo(() => {
+    const names = Array.from(
+      new Set(items.map((s) => s.className).filter(Boolean) as string[]),
+    ).sort();
+    return [
+      { value: "", label: "All classes" },
+      ...names.map((name) => ({ value: name, label: name })),
+    ];
+  }, [items]);
+
+  const getSearchText = useCallback(
+    (item: StudentListItem) =>
+      [
+        item.fullName,
+        item.className,
+        item.parent.fullName,
+        item.parent.email,
+        item.parent.phone,
+        ...item.batches.map((b) => b.name),
+      ]
+        .filter(Boolean)
+        .join(" "),
+    [],
+  );
+
+  const matchesFilters = useCallback(
+    (item: StudentListItem) => !classFilter || item.className === classFilter,
+    [classFilter],
+  );
+
+  const list = useClientList({
+    items,
+    getSearchText,
+    matchesFilters,
+    filterKey: classFilter,
+    pageSize: 10,
+  });
 
   const loadList = useCallback(async () => {
     setLoading(true);
@@ -172,6 +216,29 @@ export function StudentsManager() {
     void loadOptions();
   }, [loadList, loadOptions]);
 
+  function resetForm() {
+    setParentFullName("");
+    setParentEmail("");
+    setParentPhone("");
+    setStudentFullName("");
+    setClassName("");
+    setBatchId("");
+    setErrors({});
+    setFormError(null);
+  }
+
+  function openCreate() {
+    resetForm();
+    setCreated(null);
+    setModalOpen(true);
+    void loadOptions();
+  }
+
+  function closeModal() {
+    if (submitting) return;
+    setModalOpen(false);
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setFormError(null);
@@ -200,13 +267,7 @@ export function StudentsManager() {
         batchId,
       });
       setCreated(data);
-      setParentFullName("");
-      setParentEmail("");
-      setParentPhone("");
-      setStudentFullName("");
-      setClassName("");
-      setBatchId("");
-      setErrors({});
+      resetForm();
       await loadList();
     } catch (error) {
       setFormError(
@@ -223,25 +284,97 @@ export function StudentsManager() {
     <div className="space-y-6">
       <PageHeader
         title="Students & parents"
-        description="Create a student under a parent, pick their class, and enroll them in a batch."
+        description="Register students, link parent login email, and enroll them in a batch."
+        action={
+          <Button onClick={openCreate}>Add student</Button>
+        }
       />
 
-      <Alert variant="info">
-        Choose class and batch here so the student is ready for offline sessions.
-        Create batches under Catalog → Classes if none exist yet.
-      </Alert>
+      <ListToolbar
+        search={list.query}
+        onSearchChange={list.setQuery}
+        searchPlaceholder="Search student, parent, email, batch…"
+        filters={[
+          {
+            id: "class",
+            label: "Class",
+            value: classFilter,
+            options: classOptions,
+            onChange: setClassFilter,
+          },
+        ]}
+        resultLabel={
+          loading
+            ? "Loading…"
+            : `${list.filteredCount} of ${list.totalCount} students`
+        }
+        actions={
+          <Button variant="secondary" onClick={() => void loadList()}>
+            Refresh
+          </Button>
+        }
+      />
 
-      <Card>
-        <h2 className="text-base font-semibold text-text">Register new pair</h2>
-        <p className="mt-1 text-sm text-text-secondary">
-          One parent account + one student profile. Same email for login.
-        </p>
+      {listError ? <Alert variant="error">{listError}</Alert> : null}
 
-        <form
-          onSubmit={handleSubmit}
-          className="mt-5 space-y-5"
-          noValidate
-        >
+      <Card padding="sm">
+        {loading ? (
+          <p className="p-4 text-sm text-text-secondary">Loading students…</p>
+        ) : list.filteredCount === 0 ? (
+          <EmptyState
+            title={items.length === 0 ? "No students yet" : "No matches"}
+            description={
+              items.length === 0
+                ? "Click Add student to register a parent and student."
+                : "Try a different search or class filter."
+            }
+          />
+        ) : (
+          <div className="space-y-3 p-1 sm:p-2">
+            {list.pageItems.map((item) => (
+              <div
+                key={item.id}
+                className="rounded-xl border border-border bg-surface-muted/40 p-4"
+              >
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p className="font-semibold text-text">{item.fullName}</p>
+                    <p className="mt-0.5 text-sm text-text-secondary">
+                      {item.className ?? "Class not set"}
+                      {item.batches.length > 0
+                        ? ` · ${item.batches.map((b) => b.name).join(", ")}`
+                        : " · No batch"}
+                    </p>
+                  </div>
+                  <div className="text-sm text-text-secondary sm:text-right">
+                    <p className="font-medium text-text">
+                      Parent: {item.parent.fullName}
+                    </p>
+                    <p>{item.parent.email}</p>
+                    {item.parent.phone ? <p>{item.parent.phone}</p> : null}
+                  </div>
+                </div>
+              </div>
+            ))}
+            <Pagination
+              page={list.page}
+              totalPages={list.totalPages}
+              totalItems={list.filteredCount}
+              pageSize={list.pageSize}
+              onPageChange={list.setPage}
+            />
+          </div>
+        )}
+      </Card>
+
+      <Modal
+        open={modalOpen}
+        onClose={closeModal}
+        title="Add student & parent"
+        description="One parent email login for the family. Choose class and batch at signup."
+        size="lg"
+      >
+        <form onSubmit={handleSubmit} className="space-y-5" noValidate>
           {formError ? <Alert variant="error">{formError}</Alert> : null}
 
           {created ? (
@@ -286,7 +419,7 @@ export function StudentsManager() {
             />
             <TextField
               name="parentEmail"
-              label="Email (parent / family login)"
+              label="Family login email"
               type="email"
               value={parentEmail}
               onChange={(e) => {
@@ -296,7 +429,6 @@ export function StudentsManager() {
               }}
               error={errors.parentEmail}
               autoComplete="email"
-              hint="One email for parent login — student has no separate account."
             />
             <TextField
               name="parentPhone"
@@ -323,10 +455,7 @@ export function StudentsManager() {
             />
 
             <div className="flex w-full flex-col gap-1.5">
-              <label
-                htmlFor="className"
-                className="text-sm font-medium text-text"
-              >
+              <label htmlFor="className" className="text-sm font-medium text-text">
                 Student class
               </label>
               <select
@@ -342,7 +471,7 @@ export function StudentsManager() {
                     batchId: undefined,
                   }));
                 }}
-                className="min-h-11 w-full rounded-xl border border-border bg-surface px-3.5 py-2.5 text-base text-text shadow-sm focus:border-primary"
+                className={selectClass}
               >
                 <option value="">Select class</option>
                 {classes.map((item) => (
@@ -359,10 +488,7 @@ export function StudentsManager() {
             </div>
 
             <div className="flex w-full flex-col gap-1.5">
-              <label
-                htmlFor="batchId"
-                className="text-sm font-medium text-text"
-              >
+              <label htmlFor="batchId" className="text-sm font-medium text-text">
                 Batch
               </label>
               <select
@@ -375,7 +501,7 @@ export function StudentsManager() {
                   if (errors.batchId)
                     setErrors((c) => ({ ...c, batchId: undefined }));
                 }}
-                className="min-h-11 w-full rounded-xl border border-border bg-surface px-3.5 py-2.5 text-base text-text shadow-sm focus:border-primary disabled:opacity-60"
+                className={selectClass}
               >
                 <option value="">
                   {!className
@@ -394,61 +520,26 @@ export function StudentsManager() {
                 <p role="alert" className="text-xs text-error">
                   {errors.batchId}
                 </p>
-              ) : className && batchesForClass.length === 0 ? (
-                <p className="text-xs text-text-secondary">
-                  Create a batch under Catalog → Classes for {className}.
-                </p>
-              ) : (
-                <p className="text-xs text-text-secondary">
-                  Student is enrolled in this batch for offline sessions.
-                </p>
-              )}
+              ) : null}
             </div>
           </div>
 
-          <Button type="submit" isLoading={submitting}>
-            Create parent & student
-          </Button>
-        </form>
-      </Card>
-
-      <section className="space-y-3">
-        <h2 className="text-base font-semibold text-text">Registered students</h2>
-        {listError ? <Alert variant="error">{listError}</Alert> : null}
-        {loading ? (
-          <p className="text-sm text-text-secondary">Loading students…</p>
-        ) : items.length === 0 ? (
-          <EmptyState
-            title="No students yet"
-            description="Register a parent and student above to see them listed here."
-          />
-        ) : (
-          <div className="space-y-3">
-            {items.map((item) => (
-              <Card key={item.id} padding="sm">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div>
-                    <p className="font-semibold text-text">{item.fullName}</p>
-                    <p className="mt-0.5 text-sm text-text-secondary">
-                      {item.className ?? "Class not set"}
-                      {item.batches.length > 0
-                        ? ` · ${item.batches.map((b) => b.name).join(", ")}`
-                        : " · No batch"}
-                    </p>
-                  </div>
-                  <div className="text-sm text-text-secondary sm:text-right">
-                    <p className="font-medium text-text">
-                      Parent: {item.parent.fullName}
-                    </p>
-                    <p>{item.parent.email}</p>
-                    {item.parent.phone ? <p>{item.parent.phone}</p> : null}
-                  </div>
-                </div>
-              </Card>
-            ))}
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Button type="button" variant="secondary" onClick={closeModal}>
+              {created ? "Close" : "Cancel"}
+            </Button>
+            {!created ? (
+              <Button type="submit" isLoading={submitting}>
+                Create parent & student
+              </Button>
+            ) : (
+              <Button type="button" onClick={resetForm}>
+                Add another
+              </Button>
+            )}
           </div>
-        )}
-      </section>
+        </form>
+      </Modal>
     </div>
   );
 }

@@ -5,9 +5,13 @@ import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { ListToolbar } from "@/components/ui/ListToolbar";
+import { Modal } from "@/components/ui/Modal";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { Pagination } from "@/components/ui/Pagination";
 import { TextField } from "@/components/ui/TextField";
 import { ApiError, api } from "@/lib/api";
+import { useClientList } from "@/lib/useClientList";
 
 type CatalogItem = { id: string; name: string; isActive: boolean };
 
@@ -62,6 +66,9 @@ type BatchDetail = {
   studentCount: number;
 };
 
+const selectClass =
+  "min-h-11 w-full rounded-xl border border-border bg-surface px-3.5 py-2.5 text-base text-text shadow-sm focus:border-primary disabled:opacity-60";
+
 export function BatchesManager() {
   const [batches, setBatches] = useState<BatchListItem[]>([]);
   const [classes, setClasses] = useState<CatalogItem[]>([]);
@@ -77,6 +84,10 @@ export function BatchesManager() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
+  const [classFilter, setClassFilter] = useState("");
+  const [activeFilter, setActiveFilter] = useState("");
+  const [modalOpen, setModalOpen] = useState(false);
+
   const [name, setName] = useState("");
   const [classGradeId, setClassGradeId] = useState("");
   const [tutorProfileId, setTutorProfileId] = useState("");
@@ -90,6 +101,47 @@ export function BatchesManager() {
   const [enrolling, setEnrolling] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [togglingActive, setTogglingActive] = useState(false);
+
+  const classOptions = useMemo(() => {
+    const ids = Array.from(
+      new Map(batches.map((b) => [b.classGrade.id, b.classGrade.name])).entries(),
+    ).sort((a, b) => a[1].localeCompare(b[1]));
+    return [
+      { value: "", label: "All classes" },
+      ...ids.map(([id, label]) => ({ value: id, label })),
+    ];
+  }, [batches]);
+
+  const getSearchText = useCallback(
+    (batch: BatchListItem) =>
+      [
+        batch.name,
+        batch.classGrade.name,
+        batch.tutor?.fullName,
+        batch.tutor?.phone,
+      ]
+        .filter(Boolean)
+        .join(" "),
+    [],
+  );
+
+  const matchesFilters = useCallback(
+    (batch: BatchListItem) => {
+      if (classFilter && batch.classGrade.id !== classFilter) return false;
+      if (activeFilter === "active" && !batch.isActive) return false;
+      if (activeFilter === "inactive" && batch.isActive) return false;
+      return true;
+    },
+    [classFilter, activeFilter],
+  );
+
+  const list = useClientList({
+    items: batches,
+    getSearchText,
+    matchesFilters,
+    filterKey: `${classFilter}-${activeFilter}`,
+    pageSize: 10,
+  });
 
   const loadBatches = useCallback(async () => {
     setLoading(true);
@@ -106,6 +158,38 @@ export function BatchesManager() {
       );
     } finally {
       setLoading(false);
+    }
+  }, []);
+
+  const loadOptions = useCallback(async () => {
+    try {
+      const [classesRes, tutorsRes, studentsRes] = await Promise.all([
+        api.get<CatalogItem[]>("/catalog/classes"),
+        api.get<OfflineTutorOption[]>("/batches/offline-tutors"),
+        api.get<
+          {
+            id: string;
+            fullName: string;
+            className: string | null;
+            parent: { fullName: string; email: string };
+          }[]
+        >("/students"),
+      ]);
+      setClasses(classesRes.data.filter((c) => c.isActive));
+      setTutors(tutorsRes.data);
+      setAllStudents(
+        studentsRes.data.map((s) => ({
+          id: s.id,
+          fullName: s.fullName,
+          className: s.className,
+          parent: {
+            fullName: s.parent.fullName,
+            email: s.parent.email,
+          },
+        })),
+      );
+    } catch {
+      // dropdowns stay empty
     }
   }, []);
 
@@ -131,38 +215,8 @@ export function BatchesManager() {
 
   useEffect(() => {
     void loadBatches();
-    void (async () => {
-      try {
-        const [classesRes, tutorsRes, studentsRes] = await Promise.all([
-          api.get<CatalogItem[]>("/catalog/classes"),
-          api.get<OfflineTutorOption[]>("/batches/offline-tutors"),
-          api.get<
-            {
-              id: string;
-              fullName: string;
-              className: string | null;
-              parent: { fullName: string; email: string };
-            }[]
-          >("/students"),
-        ]);
-        setClasses(classesRes.data.filter((c) => c.isActive));
-        setTutors(tutorsRes.data);
-        setAllStudents(
-          studentsRes.data.map((s) => ({
-            id: s.id,
-            fullName: s.fullName,
-            className: s.className,
-            parent: {
-              fullName: s.parent.fullName,
-              email: s.parent.email,
-            },
-          })),
-        );
-      } catch {
-        // dropdowns stay empty; create form will show validation
-      }
-    })();
-  }, [loadBatches]);
+    void loadOptions();
+  }, [loadBatches, loadOptions]);
 
   useEffect(() => {
     if (selectedId) {
@@ -191,6 +245,26 @@ export function BatchesManager() {
     return availableStudents.filter((s) => s.className === className);
   }, [availableStudents, detail]);
 
+  function resetCreateForm() {
+    setName("");
+    setClassGradeId("");
+    setTutorProfileId("");
+    setNameError(null);
+    setClassError(null);
+    setFormError(null);
+  }
+
+  function openCreate() {
+    resetCreateForm();
+    setModalOpen(true);
+    void loadOptions();
+  }
+
+  function closeModal() {
+    if (creating) return;
+    setModalOpen(false);
+  }
+
   async function handleCreate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setFormError(null);
@@ -216,9 +290,8 @@ export function BatchesManager() {
         classGradeId,
         tutorProfileId: tutorProfileId || undefined,
       });
-      setName("");
-      setClassGradeId("");
-      setTutorProfileId("");
+      resetCreateForm();
+      setModalOpen(false);
       setSuccess(`Batch “${data.name}” created.`);
       await loadBatches();
       setSelectedId(data.id);
@@ -243,7 +316,7 @@ export function BatchesManager() {
         tutorProfileId: editTutorId || null,
       });
       setDetail(data);
-      setSuccess("Tutor assignment updated.");
+      setSuccess("Tutor updated.");
       await loadBatches();
     } catch (error) {
       setActionError(
@@ -314,7 +387,7 @@ export function BatchesManager() {
         `/batches/${detail.id}/students/${studentId}`,
       );
       setDetail(data);
-      setSuccess("Student removed from batch.");
+      setSuccess("Student removed.");
       await loadBatches();
     } catch (error) {
       setActionError(
@@ -339,113 +412,67 @@ export function BatchesManager() {
     <div className="space-y-6">
       <PageHeader
         title="Offline batches"
-        description="Create center batches under a class, assign an offline tutor, and enroll students."
+        description="Center batches by class, tutor assignment, and enrollment."
+        action={<Button onClick={openCreate}>Create batch</Button>}
       />
 
       {success ? <Alert variant="success">{success}</Alert> : null}
 
-      <Card>
-        <h2 className="text-base font-semibold text-text">Create batch</h2>
-        <p className="mt-1 text-sm text-text-secondary">
-          Example: Class 8 — Morning A. Sessions come in the next step.
-        </p>
-
-        <form onSubmit={handleCreate} className="mt-5 space-y-4" noValidate>
-          {formError ? <Alert variant="error">{formError}</Alert> : null}
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            <TextField
-              name="batchName"
-              label="Batch name"
-              value={name}
-              onChange={(e) => {
-                setName(e.target.value);
-                if (nameError) setNameError(null);
-              }}
-              error={nameError ?? undefined}
-              placeholder="e.g. Morning A"
-            />
-
-            <div className="flex w-full flex-col gap-1.5">
-              <label
-                htmlFor="classGradeId"
-                className="text-sm font-medium text-text"
-              >
-                Class
-              </label>
-              <select
-                id="classGradeId"
-                value={classGradeId}
-                onChange={(e) => {
-                  setClassGradeId(e.target.value);
-                  if (classError) setClassError(null);
-                }}
-                className="min-h-11 w-full rounded-xl border border-border bg-surface px-3.5 py-2.5 text-base text-text shadow-sm focus:border-primary"
-              >
-                <option value="">Select class</option>
-                {classes.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name}
-                  </option>
-                ))}
-              </select>
-              {classError ? (
-                <p role="alert" className="text-xs text-error">
-                  {classError}
-                </p>
-              ) : null}
-            </div>
-
-            <div className="flex w-full flex-col gap-1.5 sm:col-span-2">
-              <label
-                htmlFor="tutorProfileId"
-                className="text-sm font-medium text-text"
-              >
-                Offline tutor (optional)
-              </label>
-              <select
-                id="tutorProfileId"
-                value={tutorProfileId}
-                onChange={(e) => setTutorProfileId(e.target.value)}
-                className="min-h-11 w-full rounded-xl border border-border bg-surface px-3.5 py-2.5 text-base text-text shadow-sm focus:border-primary"
-              >
-                <option value="">Assign later</option>
-                {tutors.map((tutor) => (
-                  <option key={tutor.tutorProfileId} value={tutor.tutorProfileId}>
-                    {tutor.fullName}
-                    {tutor.phone ? ` · ${tutor.phone}` : ""}
-                  </option>
-                ))}
-              </select>
-              {tutors.length === 0 ? (
-                <p className="text-xs text-text-secondary">
-                  No approved offline tutors yet. Approve one under Tutor
-                  approvals first.
-                </p>
-              ) : null}
-            </div>
-          </div>
-
-          <Button type="submit" isLoading={creating}>
-            Create batch
+      <ListToolbar
+        search={list.query}
+        onSearchChange={list.setQuery}
+        searchPlaceholder="Search batch, class, tutor…"
+        filters={[
+          {
+            id: "class",
+            label: "Class",
+            value: classFilter,
+            options: classOptions,
+            onChange: setClassFilter,
+          },
+          {
+            id: "active",
+            label: "Status",
+            value: activeFilter,
+            options: [
+              { value: "", label: "All" },
+              { value: "active", label: "Active" },
+              { value: "inactive", label: "Inactive" },
+            ],
+            onChange: setActiveFilter,
+          },
+        ]}
+        resultLabel={
+          loading
+            ? "Loading…"
+            : `${list.filteredCount} of ${list.totalCount} batches`
+        }
+        actions={
+          <Button variant="secondary" onClick={() => void loadBatches()}>
+            Refresh
           </Button>
-        </form>
-      </Card>
+        }
+      />
+
+      {listError ? <Alert variant="error">{listError}</Alert> : null}
 
       <section className="grid gap-4 lg:grid-cols-2">
-        <div className="space-y-3">
-          <h2 className="text-base font-semibold text-text">All batches</h2>
-          {listError ? <Alert variant="error">{listError}</Alert> : null}
+        <Card padding="sm">
+          <h2 className="mb-3 px-1 text-sm font-semibold text-text">Batches</h2>
           {loading ? (
-            <p className="text-sm text-text-secondary">Loading batches…</p>
-          ) : batches.length === 0 ? (
+            <p className="p-2 text-sm text-text-secondary">Loading batches…</p>
+          ) : list.filteredCount === 0 ? (
             <EmptyState
-              title="No batches yet"
-              description="Create a batch above to get started."
+              title={batches.length === 0 ? "No batches yet" : "No matches"}
+              description={
+                batches.length === 0
+                  ? "Create a batch to get started."
+                  : "Try a different search or filter."
+              }
             />
           ) : (
-            <div className="space-y-2">
-              {batches.map((batch) => {
+            <div className="space-y-2 p-1">
+              {list.pageItems.map((batch) => {
                 const active = selectedId === batch.id;
                 return (
                   <button
@@ -453,7 +480,7 @@ export function BatchesManager() {
                     type="button"
                     onClick={() => setSelectedId(batch.id)}
                     className={[
-                      "w-full rounded-2xl border px-4 py-3 text-left transition-colors",
+                      "w-full rounded-xl border px-4 py-3 text-left transition-colors",
                       active
                         ? "border-primary bg-surface-muted"
                         : "border-border bg-surface hover:border-primary/40",
@@ -471,7 +498,11 @@ export function BatchesManager() {
                       </div>
                       <div className="text-right text-xs text-text-secondary">
                         <p>{batch.studentCount} students</p>
-                        <p className={batch.isActive ? "text-success" : "text-error"}>
+                        <p
+                          className={
+                            batch.isActive ? "text-success" : "text-error"
+                          }
+                        >
                           {batch.isActive ? "Active" : "Inactive"}
                         </p>
                       </div>
@@ -479,16 +510,23 @@ export function BatchesManager() {
                   </button>
                 );
               })}
+              <Pagination
+                page={list.page}
+                totalPages={list.totalPages}
+                totalItems={list.filteredCount}
+                pageSize={list.pageSize}
+                onPageChange={list.setPage}
+              />
             </div>
           )}
-        </div>
+        </Card>
 
         <div className="space-y-3">
-          <h2 className="text-base font-semibold text-text">Batch details</h2>
+          <h2 className="text-sm font-semibold text-text">Details</h2>
           {!selectedId ? (
             <EmptyState
               title="Select a batch"
-              description="Choose a batch from the list to enroll students or change the tutor."
+              description="Pick a batch to manage tutor and students."
             />
           ) : detailLoading || !detail ? (
             <p className="text-sm text-text-secondary">Loading details…</p>
@@ -509,13 +547,13 @@ export function BatchesManager() {
                   htmlFor="editTutor"
                   className="text-sm font-medium text-text"
                 >
-                  Assigned offline tutor
+                  Offline tutor
                 </label>
                 <select
                   id="editTutor"
                   value={editTutorId}
                   onChange={(e) => setEditTutorId(e.target.value)}
-                  className="min-h-11 w-full rounded-xl border border-border bg-surface px-3.5 py-2.5 text-base text-text shadow-sm focus:border-primary"
+                  className={selectClass}
                 >
                   <option value="">Unassigned</option>
                   {tutors.map((tutor) => (
@@ -552,9 +590,7 @@ export function BatchesManager() {
                   Enrolled students
                 </h3>
                 {detail.students.length === 0 ? (
-                  <p className="text-sm text-text-secondary">
-                    No students enrolled yet.
-                  </p>
+                  <p className="text-sm text-text-secondary">None enrolled.</p>
                 ) : (
                   <ul className="space-y-2">
                     {detail.students.map((student) => (
@@ -586,21 +622,15 @@ export function BatchesManager() {
 
               <div className="space-y-3">
                 <h3 className="text-sm font-semibold text-text">
-                  Enroll students
+                  Add students
                 </h3>
                 <p className="text-xs text-text-secondary">
-                  Prefer assigning batch when registering a student. Use this
-                  for students who were created earlier without a batch.
+                  Prefer batch at student signup. Use this for existing students
+                  without a batch.
                 </p>
-                <Alert variant="info">
-                  New students should get class + batch on Students. Use this
-                  list to catch up anyone still missing from{" "}
-                  {detail.classGrade.name}.
-                </Alert>
                 {availableStudents.length === 0 ? (
                   <p className="text-sm text-text-secondary">
-                    All registered students are already in this batch, or none
-                    exist yet.
+                    No students available to enroll.
                   </p>
                 ) : (
                   <>
@@ -612,7 +642,7 @@ export function BatchesManager() {
                           setEnrollIds(matchingClassStudents.map((s) => s.id));
                         }}
                       >
-                        Select all {detail.classGrade.name} students (
+                        Select all {detail.classGrade.name} (
                         {matchingClassStudents.length})
                       </Button>
                     ) : null}
@@ -657,7 +687,7 @@ export function BatchesManager() {
                       isLoading={enrolling}
                       disabled={enrollIds.length === 0}
                     >
-                      Enroll selected ({enrollIds.length})
+                      Enroll ({enrollIds.length})
                     </Button>
                   </>
                 )}
@@ -666,6 +696,99 @@ export function BatchesManager() {
           )}
         </div>
       </section>
+
+      <Modal
+        open={modalOpen}
+        onClose={closeModal}
+        title="Create batch"
+        description="Name the batch and choose a class. Tutor is optional."
+        size="lg"
+      >
+        <form onSubmit={handleCreate} className="space-y-4" noValidate>
+          {formError ? <Alert variant="error">{formError}</Alert> : null}
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <TextField
+              name="batchName"
+              label="Batch name"
+              value={name}
+              onChange={(e) => {
+                setName(e.target.value);
+                if (nameError) setNameError(null);
+              }}
+              error={nameError ?? undefined}
+              placeholder="e.g. Morning A"
+            />
+
+            <div className="flex w-full flex-col gap-1.5">
+              <label
+                htmlFor="classGradeId"
+                className="text-sm font-medium text-text"
+              >
+                Class
+              </label>
+              <select
+                id="classGradeId"
+                value={classGradeId}
+                onChange={(e) => {
+                  setClassGradeId(e.target.value);
+                  if (classError) setClassError(null);
+                }}
+                className={selectClass}
+              >
+                <option value="">Select class</option>
+                {classes.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+              {classError ? (
+                <p role="alert" className="text-xs text-error">
+                  {classError}
+                </p>
+              ) : null}
+            </div>
+
+            <div className="flex w-full flex-col gap-1.5 sm:col-span-2">
+              <label
+                htmlFor="tutorProfileId"
+                className="text-sm font-medium text-text"
+              >
+                Offline tutor (optional)
+              </label>
+              <select
+                id="tutorProfileId"
+                value={tutorProfileId}
+                onChange={(e) => setTutorProfileId(e.target.value)}
+                className={selectClass}
+              >
+                <option value="">Assign later</option>
+                {tutors.map((tutor) => (
+                  <option key={tutor.tutorProfileId} value={tutor.tutorProfileId}>
+                    {tutor.fullName}
+                    {tutor.phone ? ` · ${tutor.phone}` : ""}
+                  </option>
+                ))}
+              </select>
+              {tutors.length === 0 ? (
+                <p className="text-xs text-text-secondary">
+                  No approved offline tutors yet.
+                </p>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Button type="button" variant="secondary" onClick={closeModal}>
+              Cancel
+            </Button>
+            <Button type="submit" isLoading={creating}>
+              Create batch
+            </Button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }

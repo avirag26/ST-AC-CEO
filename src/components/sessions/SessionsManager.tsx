@@ -1,13 +1,17 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { ListToolbar } from "@/components/ui/ListToolbar";
+import { Modal } from "@/components/ui/Modal";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { Pagination } from "@/components/ui/Pagination";
 import { TextField } from "@/components/ui/TextField";
 import { ApiError, api } from "@/lib/api";
+import { useClientList } from "@/lib/useClientList";
 
 type SessionMode = "ONLINE" | "OFFLINE";
 type SessionStatus = "SCHEDULED" | "CANCELLED" | "COMPLETED";
@@ -59,6 +63,9 @@ type SessionItem = {
   } | null;
 };
 
+const selectClass =
+  "min-h-11 w-full rounded-xl border border-border bg-surface px-3.5 py-2.5 text-base text-text shadow-sm focus:border-primary disabled:opacity-60";
+
 function formatRange(startsAt: string, endsAt: string) {
   const start = new Date(startsAt);
   const end = new Date(endsAt);
@@ -72,6 +79,10 @@ export function SessionsManager() {
   const [batches, setBatches] = useState<BatchOption[]>([]);
   const [students, setStudents] = useState<StudentOption[]>([]);
   const [tutors, setTutors] = useState<TutorOption[]>([]);
+
+  const [modalOpen, setModalOpen] = useState(false);
+  const [statusFilter, setStatusFilter] = useState("");
+  const [modeFilter, setModeFilter] = useState("");
 
   const [mode, setMode] = useState<SessionMode>("OFFLINE");
   const [title, setTitle] = useState("");
@@ -89,6 +100,42 @@ export function SessionsManager() {
   const [formError, setFormError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
+
+  const getSearchText = useCallback(
+    (session: SessionItem) =>
+      [
+        session.title,
+        session.subjectName,
+        session.notes,
+        session.tutor.fullName,
+        session.tutor.phone,
+        session.batch?.name,
+        session.batch?.className,
+        session.student?.fullName,
+        session.mode,
+        session.status,
+      ]
+        .filter(Boolean)
+        .join(" "),
+    [],
+  );
+
+  const matchesFilters = useCallback(
+    (session: SessionItem) => {
+      if (statusFilter && session.status !== statusFilter) return false;
+      if (modeFilter && session.mode !== modeFilter) return false;
+      return true;
+    },
+    [statusFilter, modeFilter],
+  );
+
+  const list = useClientList({
+    items: sessions,
+    getSearchText,
+    matchesFilters,
+    filterKey: `${statusFilter}-${modeFilter}`,
+    pageSize: 10,
+  });
 
   const loadSessions = useCallback(async () => {
     setLoading(true);
@@ -119,46 +166,52 @@ export function SessionsManager() {
     }
   }, []);
 
+  const loadFormOptions = useCallback(async () => {
+    try {
+      const [subjectsRes, batchesRes, studentsRes] = await Promise.all([
+        api.get<CatalogItem[]>("/catalog/subjects"),
+        api.get<BatchOption[]>("/batches"),
+        api.get<
+          {
+            id: string;
+            fullName: string;
+            className: string | null;
+            parent: { fullName: string; email: string };
+          }[]
+        >("/students"),
+      ]);
+      setSubjects(
+        subjectsRes.data.filter((s) => s.isActive).map((s) => s.name),
+      );
+      setBatches(batchesRes.data.filter((b) => b.isActive));
+      setStudents(
+        studentsRes.data.map((s) => ({
+          id: s.id,
+          fullName: s.fullName,
+          className: s.className,
+          parent: s.parent,
+        })),
+      );
+    } catch {
+      // dropdowns may stay empty
+    }
+  }, []);
+
   useEffect(() => {
     void loadSessions();
-    void (async () => {
-      try {
-        const [subjectsRes, batchesRes, studentsRes] = await Promise.all([
-          api.get<CatalogItem[]>("/catalog/subjects"),
-          api.get<BatchOption[]>("/batches"),
-          api.get<
-            {
-              id: string;
-              fullName: string;
-              className: string | null;
-              parent: { fullName: string; email: string };
-            }[]
-          >("/students"),
-        ]);
-        setSubjects(
-          subjectsRes.data.filter((s) => s.isActive).map((s) => s.name),
-        );
-        setBatches(batchesRes.data.filter((b) => b.isActive));
-        setStudents(
-          studentsRes.data.map((s) => ({
-            id: s.id,
-            fullName: s.fullName,
-            className: s.className,
-            parent: s.parent,
-          })),
-        );
-      } catch {
-        // dropdowns may stay empty
-      }
-    })();
-  }, [loadSessions]);
+    void loadFormOptions();
+  }, [loadSessions, loadFormOptions]);
 
   useEffect(() => {
+    if (!modalOpen) return;
     setTutorProfileId("");
     void loadTutors(mode);
-  }, [mode, loadTutors]);
+  }, [mode, loadTutors, modalOpen]);
 
-  const selectedBatch = batches.find((b) => b.id === batchId) ?? null;
+  const selectedBatch = useMemo(
+    () => batches.find((b) => b.id === batchId) ?? null,
+    [batches, batchId],
+  );
 
   useEffect(() => {
     if (mode !== "OFFLINE" || !batchId) return;
@@ -167,6 +220,30 @@ export function SessionsManager() {
       setTutorProfileId(batch.tutor.tutorProfileId);
     }
   }, [batchId, batches, mode]);
+
+  function resetForm() {
+    setMode("OFFLINE");
+    setTitle("");
+    setSubjectName("");
+    setStartsAt("");
+    setEndsAt("");
+    setTutorProfileId("");
+    setBatchId("");
+    setStudentId("");
+    setNotes("");
+    setFormError(null);
+  }
+
+  function openSchedule() {
+    resetForm();
+    setModalOpen(true);
+    void loadFormOptions();
+  }
+
+  function closeModal() {
+    if (creating) return;
+    setModalOpen(false);
+  }
 
   async function handleCreate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -185,10 +262,12 @@ export function SessionsManager() {
       setFormError("Offline sessions need a batch.");
       return;
     }
-    if (mode === "OFFLINE" && selectedBatch && selectedBatch.studentCount === 0) {
-      setFormError(
-        "This batch has no enrolled students. Enroll students when registering them (Students → class + batch), or under Offline batches.",
-      );
+    if (
+      mode === "OFFLINE" &&
+      selectedBatch &&
+      selectedBatch.studentCount === 0
+    ) {
+      setFormError("This batch has no enrolled students.");
       return;
     }
     if (mode === "ONLINE" && !studentId) {
@@ -209,13 +288,8 @@ export function SessionsManager() {
         studentId: mode === "ONLINE" ? studentId : undefined,
         notes: notes.trim() || undefined,
       });
-      setTitle("");
-      setSubjectName("");
-      setStartsAt("");
-      setEndsAt("");
-      setBatchId("");
-      setStudentId("");
-      setNotes("");
+      resetForm();
+      setModalOpen(false);
       setSuccess("Session scheduled.");
       await loadSessions();
     } catch (error) {
@@ -251,22 +325,151 @@ export function SessionsManager() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Schedule sessions"
-        description="Create online home sessions or offline center sessions and assign a teacher."
+        title="Sessions"
+        description="Schedule online or offline sessions and assign a tutor."
+        action={<Button onClick={openSchedule}>Schedule session</Button>}
       />
 
       {success ? <Alert variant="success">{success}</Alert> : null}
 
-      <Card>
-        <h2 className="text-base font-semibold text-text">New session</h2>
-        <form onSubmit={handleCreate} className="mt-5 space-y-4" noValidate>
+      <ListToolbar
+        search={list.query}
+        onSearchChange={list.setQuery}
+        searchPlaceholder="Search title, tutor, batch, student…"
+        filters={[
+          {
+            id: "status",
+            label: "Status",
+            value: statusFilter,
+            options: [
+              { value: "", label: "All statuses" },
+              { value: "SCHEDULED", label: "Scheduled" },
+              { value: "COMPLETED", label: "Completed" },
+              { value: "CANCELLED", label: "Cancelled" },
+            ],
+            onChange: setStatusFilter,
+          },
+          {
+            id: "mode",
+            label: "Mode",
+            value: modeFilter,
+            options: [
+              { value: "", label: "All modes" },
+              { value: "OFFLINE", label: "Offline" },
+              { value: "ONLINE", label: "Online" },
+            ],
+            onChange: setModeFilter,
+          },
+        ]}
+        resultLabel={
+          loading
+            ? "Loading…"
+            : `${list.filteredCount} of ${list.totalCount} sessions`
+        }
+        actions={
+          <Button variant="secondary" onClick={() => void loadSessions()}>
+            Refresh
+          </Button>
+        }
+      />
+
+      {listError ? <Alert variant="error">{listError}</Alert> : null}
+
+      <Card padding="sm">
+        {loading ? (
+          <p className="p-4 text-sm text-text-secondary">Loading sessions…</p>
+        ) : list.filteredCount === 0 ? (
+          <EmptyState
+            title={sessions.length === 0 ? "No sessions yet" : "No matches"}
+            description={
+              sessions.length === 0
+                ? "Schedule a session to get started."
+                : "Try a different search or filter."
+            }
+          />
+        ) : (
+          <div className="space-y-3 p-1 sm:p-2">
+            {list.pageItems.map((session) => (
+              <div
+                key={session.id}
+                className="rounded-xl border border-border bg-surface-muted/40 p-4"
+              >
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="font-semibold text-text">
+                        {session.title ||
+                          session.subjectName ||
+                          `${session.mode === "ONLINE" ? "Online" : "Offline"} session`}
+                      </p>
+                      <span className="rounded-full bg-surface-muted px-2 py-0.5 text-xs font-medium text-primary">
+                        {session.mode}
+                      </span>
+                      <span
+                        className={[
+                          "rounded-full px-2 py-0.5 text-xs font-medium",
+                          session.status === "SCHEDULED"
+                            ? "bg-emerald-50 text-success"
+                            : session.status === "CANCELLED"
+                              ? "bg-error-bg text-error"
+                              : "bg-surface-muted text-text-secondary",
+                        ].join(" ")}
+                      >
+                        {session.status}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-sm text-text-secondary">
+                      {formatRange(session.startsAt, session.endsAt)}
+                    </p>
+                    <p className="mt-1 text-sm text-text-secondary">
+                      Tutor: {session.tutor.fullName}
+                      {session.batch
+                        ? ` · ${session.batch.className} — ${session.batch.name}`
+                        : ""}
+                      {session.student
+                        ? ` · ${session.student.fullName}`
+                        : ""}
+                    </p>
+                  </div>
+                  {session.status === "SCHEDULED" ? (
+                    <Button
+                      size="sm"
+                      variant="dangerOutline"
+                      onClick={() => handleCancel(session.id)}
+                      isLoading={cancellingId === session.id}
+                    >
+                      Cancel
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            ))}
+            <Pagination
+              page={list.page}
+              totalPages={list.totalPages}
+              totalItems={list.filteredCount}
+              pageSize={list.pageSize}
+              onPageChange={list.setPage}
+            />
+          </div>
+        )}
+      </Card>
+
+      <Modal
+        open={modalOpen}
+        onClose={closeModal}
+        title="Schedule session"
+        description="Offline uses a batch; online uses one student."
+        size="lg"
+      >
+        <form onSubmit={handleCreate} className="space-y-4" noValidate>
           {formError ? <Alert variant="error">{formError}</Alert> : null}
 
           <div className="grid gap-2 sm:grid-cols-2">
             {(
               [
-                { id: "OFFLINE", label: "Offline (center / batch)" },
-                { id: "ONLINE", label: "Online (home tutor)" },
+                { id: "OFFLINE", label: "Offline" },
+                { id: "ONLINE", label: "Online" },
               ] as const
             ).map((option) => (
               <button
@@ -309,7 +512,7 @@ export function SessionsManager() {
                 id="subjectName"
                 value={subjectName}
                 onChange={(e) => setSubjectName(e.target.value)}
-                className="min-h-11 w-full rounded-xl border border-border bg-surface px-3.5 py-2.5 text-base text-text shadow-sm focus:border-primary"
+                className={selectClass}
               >
                 <option value="">Select subject</option>
                 {subjects.map((name) => (
@@ -349,7 +552,7 @@ export function SessionsManager() {
                   id="batchId"
                   value={batchId}
                   onChange={(e) => setBatchId(e.target.value)}
-                  className="min-h-11 w-full rounded-xl border border-border bg-surface px-3.5 py-2.5 text-base text-text shadow-sm focus:border-primary"
+                  className={selectClass}
                 >
                   <option value="">Select batch</option>
                   {batches.map((batch) => (
@@ -369,8 +572,8 @@ export function SessionsManager() {
                     ].join(" ")}
                   >
                     {selectedBatch.studentCount === 0
-                      ? "No students in this batch yet. Assign class + batch when registering the student (Students), or enroll under Offline batches."
-                      : `${selectedBatch.studentCount} student${selectedBatch.studentCount === 1 ? "" : "s"} in this batch.`}
+                      ? "No students in this batch."
+                      : `${selectedBatch.studentCount} student${selectedBatch.studentCount === 1 ? "" : "s"} enrolled.`}
                   </p>
                 ) : null}
               </div>
@@ -386,7 +589,7 @@ export function SessionsManager() {
                   id="studentId"
                   value={studentId}
                   onChange={(e) => setStudentId(e.target.value)}
-                  className="min-h-11 w-full rounded-xl border border-border bg-surface px-3.5 py-2.5 text-base text-text shadow-sm focus:border-primary"
+                  className={selectClass}
                   required
                 >
                   <option value="">Select student</option>
@@ -407,13 +610,13 @@ export function SessionsManager() {
                 htmlFor="tutorProfileId"
                 className="text-sm font-medium text-text"
               >
-                Assign tutor
+                Tutor
               </label>
               <select
                 id="tutorProfileId"
                 value={tutorProfileId}
                 onChange={(e) => setTutorProfileId(e.target.value)}
-                className="min-h-11 w-full rounded-xl border border-border bg-surface px-3.5 py-2.5 text-base text-text shadow-sm focus:border-primary"
+                className={selectClass}
               >
                 <option value="">Select tutor</option>
                 {tutors.map((tutor) => (
@@ -425,8 +628,7 @@ export function SessionsManager() {
               </select>
               {tutors.length === 0 ? (
                 <p className="text-xs text-text-secondary">
-                  No approved{" "}
-                  {mode === "ONLINE" ? "home" : "offline"} tutors yet.
+                  No approved {mode === "ONLINE" ? "home" : "offline"} tutors.
                 </p>
               ) : null}
             </div>
@@ -440,79 +642,16 @@ export function SessionsManager() {
             />
           </div>
 
-          <Button type="submit" isLoading={creating}>
-            Schedule session
-          </Button>
-        </form>
-      </Card>
-
-      <section className="space-y-3">
-        <h2 className="text-base font-semibold text-text">Scheduled sessions</h2>
-        {listError ? <Alert variant="error">{listError}</Alert> : null}
-        {loading ? (
-          <p className="text-sm text-text-secondary">Loading sessions…</p>
-        ) : sessions.length === 0 ? (
-          <EmptyState
-            title="No sessions yet"
-            description="Schedule an online or offline session above."
-          />
-        ) : (
-          <div className="space-y-3">
-            {sessions.map((session) => (
-              <Card key={session.id} padding="sm">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="font-semibold text-text">
-                        {session.title ||
-                          session.subjectName ||
-                          `${session.mode === "ONLINE" ? "Online" : "Offline"} session`}
-                      </p>
-                      <span className="rounded-full bg-surface-muted px-2 py-0.5 text-xs font-medium text-primary">
-                        {session.mode}
-                      </span>
-                      <span
-                        className={[
-                          "rounded-full px-2 py-0.5 text-xs font-medium",
-                          session.status === "SCHEDULED"
-                            ? "bg-emerald-50 text-success"
-                            : session.status === "CANCELLED"
-                              ? "bg-error-bg text-error"
-                              : "bg-surface-muted text-text-secondary",
-                        ].join(" ")}
-                      >
-                        {session.status}
-                      </span>
-                    </div>
-                    <p className="mt-1 text-sm text-text-secondary">
-                      {formatRange(session.startsAt, session.endsAt)}
-                    </p>
-                    <p className="mt-1 text-sm text-text-secondary">
-                      Tutor: {session.tutor.fullName}
-                      {session.batch
-                        ? ` · Batch: ${session.batch.className} — ${session.batch.name}`
-                        : ""}
-                      {session.student
-                        ? ` · Student: ${session.student.fullName}`
-                        : ""}
-                    </p>
-                  </div>
-                  {session.status === "SCHEDULED" ? (
-                    <Button
-                      size="sm"
-                      variant="dangerOutline"
-                      onClick={() => handleCancel(session.id)}
-                      isLoading={cancellingId === session.id}
-                    >
-                      Cancel
-                    </Button>
-                  ) : null}
-                </div>
-              </Card>
-            ))}
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Button type="button" variant="secondary" onClick={closeModal}>
+              Cancel
+            </Button>
+            <Button type="submit" isLoading={creating}>
+              Schedule
+            </Button>
           </div>
-        )}
-      </section>
+        </form>
+      </Modal>
     </div>
   );
 }

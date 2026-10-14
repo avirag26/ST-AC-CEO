@@ -6,10 +6,14 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { ListToolbar } from "@/components/ui/ListToolbar";
+import { Modal } from "@/components/ui/Modal";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { Pagination } from "@/components/ui/Pagination";
 import { Tabs } from "@/components/ui/Tabs";
 import { TextField } from "@/components/ui/TextField";
 import { ApiError, api } from "@/lib/api";
+import { useClientList } from "@/lib/useClientList";
 
 export type TutorCard = {
   id: string;
@@ -53,6 +57,7 @@ export function TutorsManager() {
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [roleFilter, setRoleFilter] = useState("");
 
   const [approveTarget, setApproveTarget] = useState<TutorCard | null>(null);
   const [rejectTarget, setRejectTarget] = useState<TutorCard | null>(null);
@@ -87,23 +92,50 @@ export function TutorsManager() {
     void loadTutors();
   }, [loadTutors]);
 
+  const getSearchText = useCallback(
+    (tutor: TutorCard) =>
+      [
+        tutor.fullName,
+        tutor.email,
+        tutor.phone,
+        tutor.documentsNote,
+        ...tutor.subjects,
+        ...tutor.classes,
+      ]
+        .filter(Boolean)
+        .join(" "),
+    [],
+  );
+
+  const matchesFilters = useCallback(
+    (tutor: TutorCard) => !roleFilter || tutor.role === roleFilter,
+    [roleFilter],
+  );
+
+  const list = useClientList({
+    items: tutors,
+    getSearchText,
+    matchesFilters,
+    filterKey: `${activeTab}-${roleFilter}`,
+    pageSize: 10,
+  });
+
   const emptyCopy = useMemo(() => {
     if (activeTab === "PENDING") {
       return {
         title: "No pending tutors",
-        description:
-          "When tutors register, they will appear here for your approval.",
+        description: "New tutor signups appear here.",
       };
     }
     if (activeTab === "APPROVED") {
       return {
-        title: "No approved tutors yet",
-        description: "Approved tutors will be listed here.",
+        title: "No approved tutors",
+        description: "Approved tutors are listed here.",
       };
     }
     return {
       title: "No rejected tutors",
-      description: "Rejected registrations will appear in this list.",
+      description: "Rejected signups are listed here.",
     };
   }, [activeTab]);
 
@@ -112,7 +144,7 @@ export function TutorsManager() {
     setActionLoading(true);
     try {
       await api.patch(`/tutors/${approveTarget.id}/approve`);
-      setSuccess(`Approved ${approveTarget.fullName}. They can sign in now.`);
+      setSuccess(`Approved ${approveTarget.fullName}.`);
       setApproveTarget(null);
       await loadTutors();
     } catch (error) {
@@ -150,16 +182,17 @@ export function TutorsManager() {
     }
   }
 
+  function closeRejectModal() {
+    if (actionLoading) return;
+    setRejectTarget(null);
+    setRejectReason("");
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
         title="Tutor approvals"
-        description="Review tutor registrations. Only approved tutors can sign in with their phone number and password."
-        action={
-          <Button variant="secondary" size="sm" onClick={() => void loadTutors()}>
-            Refresh
-          </Button>
-        }
+        description="Review signups. Approved tutors can sign in with phone and password."
       />
 
       <Tabs
@@ -171,41 +204,58 @@ export function TutorsManager() {
 
       {success ? <Alert variant="success">{success}</Alert> : null}
 
-      <Card padding="sm">
-        <div className="border-b border-border px-4 py-3 sm:px-5">
-          <h3 className="text-sm font-semibold text-text">
-            {tabItems.find((tab) => tab.id === activeTab)?.label} tutors
-          </h3>
-          <p className="text-xs text-text-secondary">
-            {loading
-              ? "Loading…"
-              : `${tutors.length} tutor${tutors.length === 1 ? "" : "s"}`}
-          </p>
-        </div>
+      <ListToolbar
+        search={list.query}
+        onSearchChange={list.setQuery}
+        searchPlaceholder="Search name, phone, email, subjects…"
+        filters={[
+          {
+            id: "role",
+            label: "Role",
+            value: roleFilter,
+            options: [
+              { value: "", label: "All roles" },
+              { value: "HOME_TUTOR", label: "Home tutor" },
+              { value: "OFFLINE_TUTOR", label: "Offline tutor" },
+            ],
+            onChange: setRoleFilter,
+          },
+        ]}
+        resultLabel={
+          loading
+            ? "Loading…"
+            : `${list.filteredCount} of ${list.totalCount} tutors`
+        }
+        actions={
+          <Button variant="secondary" onClick={() => void loadTutors()}>
+            Refresh
+          </Button>
+        }
+      />
 
-        <div className="p-3 sm:p-4">
-          {loading ? (
-            <div className="space-y-3">
-              {[1, 2, 3].map((row) => (
-                <div
-                  key={row}
-                  className="h-36 animate-pulse rounded-2xl bg-surface-muted"
-                />
-              ))}
-            </div>
-          ) : listError ? (
-            <Alert variant="error">{listError}</Alert>
-          ) : tutors.length === 0 ? (
-            <EmptyState
-              title={emptyCopy.title}
-              description={emptyCopy.description}
-            />
-          ) : (
+      {listError ? <Alert variant="error">{listError}</Alert> : null}
+
+      <Card padding="sm">
+        {loading ? (
+          <p className="p-4 text-sm text-text-secondary">Loading tutors…</p>
+        ) : list.filteredCount === 0 ? (
+          <EmptyState
+            title={
+              tutors.length === 0 ? emptyCopy.title : "No matches"
+            }
+            description={
+              tutors.length === 0
+                ? emptyCopy.description
+                : "Try a different search or role filter."
+            }
+          />
+        ) : (
+          <div className="space-y-3 p-1 sm:p-2">
             <ul className="space-y-3">
-              {tutors.map((tutor) => (
+              {list.pageItems.map((tutor) => (
                 <li
                   key={tutor.id}
-                  className="rounded-2xl border border-border bg-surface-muted/40 p-4"
+                  className="rounded-xl border border-border bg-surface-muted/40 p-4"
                 >
                   <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                     <div className="min-w-0 space-y-3">
@@ -249,7 +299,7 @@ export function TutorsManager() {
                             Documents
                           </dt>
                           <dd className="font-medium text-text">
-                            {tutor.documentsNote || "None shared"}
+                            {tutor.documentsNote || "—"}
                           </dd>
                         </div>
                       </dl>
@@ -328,7 +378,7 @@ export function TutorsManager() {
                             setApproveTarget(tutor);
                           }}
                         >
-                          Approve now
+                          Approve
                         </Button>
                       ) : null}
                     </div>
@@ -336,16 +386,23 @@ export function TutorsManager() {
                 </li>
               ))}
             </ul>
-          )}
-        </div>
+            <Pagination
+              page={list.page}
+              totalPages={list.totalPages}
+              totalItems={list.filteredCount}
+              pageSize={list.pageSize}
+              onPageChange={list.setPage}
+            />
+          </div>
+        )}
       </Card>
 
       <ConfirmDialog
         open={Boolean(approveTarget)}
-        title="Approve this tutor?"
+        title="Approve tutor?"
         description={
           approveTarget
-            ? `${approveTarget.fullName} will be able to sign in with phone ${approveTarget.phone || "number"} and start using the tutor app.`
+            ? `${approveTarget.fullName} can sign in after approval.`
             : ""
         }
         confirmLabel="Approve"
@@ -356,66 +413,43 @@ export function TutorsManager() {
         onConfirm={() => void confirmApprove()}
       />
 
-      {rejectTarget ? (
-        <div className="fixed inset-0 z-50 flex items-end justify-center p-4 sm:items-center">
-          <button
-            type="button"
-            className="absolute inset-0 bg-slate-900/40"
-            aria-label="Close dialog"
-            onClick={() => {
-              if (!actionLoading) {
-                setRejectTarget(null);
-                setRejectReason("");
-              }
-            }}
+      <Modal
+        open={Boolean(rejectTarget)}
+        onClose={closeRejectModal}
+        title="Reject tutor?"
+        description={
+          rejectTarget
+            ? `${rejectTarget.fullName} cannot sign in until approved again.`
+            : undefined
+        }
+        size="md"
+      >
+        <div className="space-y-4">
+          <TextField
+            name="rejectReason"
+            label="Reason (optional)"
+            placeholder="e.g. Incomplete documents"
+            value={rejectReason}
+            onChange={(event) => setRejectReason(event.target.value)}
           />
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="reject-dialog-title"
-            className="relative z-10 w-full max-w-md rounded-2xl border border-border bg-surface p-5 shadow-[var(--shadow-card)] sm:p-6"
-          >
-            <h3
-              id="reject-dialog-title"
-              className="text-lg font-semibold text-text"
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Button
+              variant="secondary"
+              onClick={closeRejectModal}
+              disabled={actionLoading}
             >
-              Reject this tutor?
-            </h3>
-            <p className="mt-2 text-sm leading-relaxed text-text-secondary">
-              {rejectTarget.fullName} will not be able to sign in until you
-              approve them later.
-            </p>
-            <div className="mt-4">
-              <TextField
-                name="rejectReason"
-                label="Reason (optional)"
-                placeholder="e.g. Incomplete documents"
-                value={rejectReason}
-                onChange={(event) => setRejectReason(event.target.value)}
-              />
-            </div>
-            <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  setRejectTarget(null);
-                  setRejectReason("");
-                }}
-                disabled={actionLoading}
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="danger"
-                isLoading={actionLoading}
-                onClick={() => void confirmReject()}
-              >
-                Reject
-              </Button>
-            </div>
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              isLoading={actionLoading}
+              onClick={() => void confirmReject()}
+            >
+              Reject
+            </Button>
           </div>
         </div>
-      ) : null}
+      </Modal>
     </div>
   );
 }

@@ -9,17 +9,17 @@ import { api } from "@/lib/api";
 import { clearSession, type AuthUser } from "@/lib/auth-storage";
 
 const navItems = [
-  { href: "/resources", label: "Resources", hint: "Class notes & PDFs" },
-  { href: "/quizzes", label: "Quizzes", hint: "Practice & scores" },
-  { href: "/finance", label: "Fees & salaries", hint: "Balances & payment records" },
-  { href: "/exams", label: "Exams & results", hint: "Timetable & progress" },
-  { href: "/dashboard", label: "Dashboard", hint: "Overview" },
+  { href: "/resources", label: "Resources", hint: "PDFs" },
+  { href: "/quizzes", label: "Quizzes", hint: "Assignments" },
+  { href: "/finance", label: "Fees & salaries", hint: "Payments" },
+  { href: "/exams", label: "Exams", hint: "Schedule & results" },
+  { href: "/dashboard", label: "Dashboard", hint: "Summary" },
   { href: "/catalog", label: "Classes & Subjects", hint: "Catalog" },
-  { href: "/tutors", label: "Tutor approvals", hint: "Pending reviews" },
-  { href: "/students", label: "Students & parents", hint: "Create accounts" },
-  { href: "/batches", label: "Offline batches", hint: "Groups & tutors" },
-  { href: "/sessions", label: "Schedule sessions", hint: "Online & offline" },
-  { href: "/tracking", label: "Live tracking", hint: "Home tutor journeys" },
+  { href: "/tutors", label: "Tutor approvals", hint: "Pending" },
+  { href: "/students", label: "Students & parents", hint: "Accounts" },
+  { href: "/batches", label: "Offline batches", hint: "Groups" },
+  { href: "/sessions", label: "Schedule sessions", hint: "Calendar" },
+  { href: "/tracking", label: "Live tracking", hint: "Journeys" },
 ];
 
 type AppShellProps = {
