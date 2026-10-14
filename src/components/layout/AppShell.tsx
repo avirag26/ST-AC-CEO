@@ -9,6 +9,10 @@ import { api } from "@/lib/api";
 import { clearSession, type AuthUser } from "@/lib/auth-storage";
 
 const navItems = [
+  { href: "/resources", label: "Resources", hint: "Class notes & PDFs" },
+  { href: "/quizzes", label: "Quizzes", hint: "Practice & scores" },
+  { href: "/finance", label: "Fees & salaries", hint: "Balances & payment records" },
+  { href: "/exams", label: "Exams & results", hint: "Timetable & progress" },
   { href: "/dashboard", label: "Dashboard", hint: "Overview" },
   { href: "/catalog", label: "Classes & Subjects", hint: "Catalog" },
   { href: "/tutors", label: "Tutor approvals", hint: "Pending reviews" },
@@ -42,7 +46,8 @@ export function AppShell({ user, children }: AppShellProps) {
   }
 
   return (
-    <div className="min-h-dvh bg-[linear-gradient(180deg,#eff6ff_0%,#f8fbff_40%,#f8fafc_100%)] lg:grid lg:grid-cols-[260px_1fr]">
+    <div className="min-h-dvh bg-background lg:grid lg:grid-cols-[260px_1fr]">
+      <a href="#main-content" className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-xl focus:bg-white focus:p-3 focus:text-primary">Skip to main content</a>
       <header className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-border/80 bg-surface/90 px-4 py-3 backdrop-blur lg:hidden">
         <div>
           <p className="text-xs font-medium text-primary">Straight Line Academy</p>
@@ -70,6 +75,7 @@ export function AppShell({ user, children }: AppShellProps) {
                 <Link
                   key={item.href}
                   href={item.href}
+                  aria-current={active ? "page" : undefined}
                   onClick={() => setMenuOpen(false)}
                   className={cn(
                     "min-h-11 rounded-xl px-3 py-2 text-sm font-medium",
@@ -98,8 +104,8 @@ export function AppShell({ user, children }: AppShellProps) {
         </div>
       ) : null}
 
-      <aside className="hidden border-r border-border/80 bg-surface/90 lg:flex lg:min-h-dvh lg:flex-col lg:px-4 lg:py-6 lg:backdrop-blur">
-        <div className="rounded-2xl bg-primary px-4 py-5 text-white shadow-sm">
+      <aside className="hidden border-r border-border bg-surface lg:sticky lg:top-0 lg:flex lg:h-dvh lg:flex-col lg:overflow-y-auto lg:px-4 lg:py-6">
+        <div className="rounded-2xl bg-[#17243b] px-4 py-5 text-white shadow-sm">
           <p className="text-sm font-medium text-white/85">Straight Line Academy</p>
           <h1 className="mt-1 text-xl font-semibold tracking-tight">CEO Portal</h1>
           <p className="mt-2 text-sm text-white/80">
@@ -114,10 +120,11 @@ export function AppShell({ user, children }: AppShellProps) {
               <Link
                 key={item.href}
                 href={item.href}
+                aria-current={active ? "page" : undefined}
                 className={cn(
                   "rounded-xl px-3 py-3 transition-colors",
                   active
-                    ? "bg-surface-muted text-primary"
+                    ? "bg-blue-50 text-primary ring-1 ring-blue-100"
                     : "text-text-secondary hover:bg-surface-muted hover:text-text",
                 )}
               >
@@ -142,11 +149,15 @@ export function AppShell({ user, children }: AppShellProps) {
         </div>
       </aside>
 
-      <div className="min-w-0">
-        <div className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6 lg:py-8">
+      <main id="main-content" className="min-w-0">
+        <div className="hidden items-center justify-between border-b border-border bg-white/80 px-8 py-4 lg:flex">
+          <p className="text-sm text-text-secondary">Workspace <span className="mx-3 text-border">/</span> <span className="font-medium text-text">{navItems.find((item) => item.href === pathname)?.label ?? "Academy"}</span></p>
+          <span className="flex items-center gap-3 text-sm font-medium"><span className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-50 text-primary" aria-hidden>{user.fullName.slice(0, 1)}</span>{user.fullName}</span>
+        </div>
+        <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8 lg:py-10">
           {children}
         </div>
-      </div>
+      </main>
     </div>
   );
 }

@@ -116,7 +116,6 @@ export function LoginForm() {
           }
         }}
         error={errors.phone}
-        hint="Default seed CEO phone: 9999999999"
       />
 
       <PasswordField
@@ -132,12 +131,9 @@ export function LoginForm() {
           }
         }}
         error={errors.password}
-        hint="Default seed password: Ceo@12345"
       />
 
-      <p className="text-sm text-text-secondary">
-        Forgot password? Email OTP reset comes in a later step.
-      </p>
+      <a href="/forgot-password" className="inline-flex min-h-11 items-center text-sm font-medium text-primary">Forgot password?</a>
 
       <div className="mt-auto pt-2">
         <Button type="submit" fullWidth isLoading={isSubmitting}>
